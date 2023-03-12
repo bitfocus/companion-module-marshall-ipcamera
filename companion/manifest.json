@@ -1,26 +1,30 @@
 {
-	"id": "your-module-name",
-	"name": "your-module-name",
-	"shortname": "module-shortname",
-	"description": "A short one line description of your module",
-	"version": "0.0.0",
+	"id": "marshall-ipcamera",
+	"name": "marshall-ipcamera",
+	"shortname": "m-cam",
+	"description": "Control Marshall IP cameras",
+	"version": "1.0.0",
 	"license": "MIT",
-	"repository": "git+https://github.com/bitfocus/companion-module-your-module-name.git",
-	"bugs": "https://github.com/bitfocus/companion-module-your-module-name/issues",
+	"repository": "https://github.com/bitfocus/companion-module-marshall-ipcamera",
+	"bugs": "https://github.com/bitfocus/companion-module-marshall-ipcamera/issues",
 	"maintainers": [
 		{
-			"name": "Your name",
-			"email": "Your email"
+			"name": "Jan Görgen",
+			"email": "jan-goergen@web.de"
 		}
 	],
+	"legacyIds": [],
 	"runtime": {
 		"type": "node18",
 		"api": "nodejs-ipc",
 		"apiVersion": "0.0.0",
-		"entrypoint": "../main.js"
+		"entrypoint": "../index.js"
 	},
-	"legacyIds": [],
-	"manufacturer": "Your company",
-	"products": ["Your product"],
-	"keywords": []
+	"manufacturer": "Marshall",
+	"products": [
+		"CVxxx IP-Cameras"
+	],
+	"keywords": [
+		"Marshall IP Camera"
+	]
 }
