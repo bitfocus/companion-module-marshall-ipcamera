@@ -1,4 +1,4 @@
-## Marshall Cameras
+## Marshall IP Cameras
 
 This module will allow you to control Marshall IP cameras.
 
