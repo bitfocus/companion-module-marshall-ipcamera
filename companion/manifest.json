@@ -22,7 +22,11 @@
 	},
 	"manufacturer": "Marshall",
 	"products": [
-		"CVxxx IP-Cameras"
+		"CV355",
+		"CV420",
+		"CV420e",
+		"CV630",
+		"CV730"
 	],
 	"keywords": [
 		"Marshall IP Camera"
