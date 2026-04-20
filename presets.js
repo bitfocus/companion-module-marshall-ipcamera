@@ -305,7 +305,7 @@ function getPresets(inst) {
             ],
             feedbacks: [
                 {
-                    feedbackId: 'audio_in',
+                    feedbackId: 'audio_input',
                     options: {invert: true},
                     style: {
                         text: "Audio:\nOFF",

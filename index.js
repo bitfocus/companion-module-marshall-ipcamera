@@ -34,7 +34,9 @@ class mCamInstance extends InstanceBase {
 
 		this.connTimer = undefined
 		this.error = false
-		this.requestTimeout = 1000
+		this.requestTimeout = 5000
+		this.cameraType = undefined
+		this.alternateRequestCameraNames = ['CV370']
 
 		this.iFrameMapping = {
 			stream1: {
@@ -110,6 +112,7 @@ class mCamInstance extends InstanceBase {
 			NoiseReduction2DLevel: '',
 			NoiseReduction3DLevel: '',
 			PictureEffect: '',
+			IRCut: '',
 			VisibilityEnhancerLevel: '',
 
 			// ndi
@@ -213,44 +216,53 @@ class mCamInstance extends InstanceBase {
 
 	async init(config) {
 		this.updateStatus('connecting')
-		this.configUpdated(config)
+		if (config.host) {
+			this.configUpdated(config)
+		}
 	}
 
 	async configUpdated(config) {
+		this.log('debug', 'Config updated')
 		// polling is running and polling has been de-selected by config change
 		if (this.pollTimer !== undefined) {
 			clearInterval(this.pollTimer)
 			delete this.pollTimer
 		}
+		const oldHost = this.config?.host
 		this.config = config
+		if (oldHost !== this.config.host) {
+			this.cameraType = undefined
+		}
 		
 		this.initActions()
 		this.initFeedbacks()
 		this.initVariables()
 		this.initPresets()
 
-		console.log('debug', 'Try to connect...')
+		this.log('debug', 'Try to connect...')
 		this.connTimer = setInterval(() => {
 			this.init_api()
 		}, 1000)
 	}
 
 	async init_api() {
+		try {
+			let parameters = []
+			this.pollCommands.forEach((command) => {
+				parameters.push(['inqjs', command])
+			})
 
-		let parameters = []
-		this.pollCommands.forEach((command) => {
-			parameters.push(['inqjs', command])
-		})
-
-		const system = await this.makeRequest('inquiry', parameters)
-
-		if (system.status == 200) {
-			console.log('debug', 'Connection succeeded!')
-			if (this.connTimer !== undefined) {
-				clearInterval(this.connTimer)
-				delete this.connTimer
+			const system = await this.makeRequest('inquiry', parameters)
+			if (system.status == 200) {
+				this.log('debug', 'Connection succeeded!')
+				if (this.connTimer !== undefined) {
+					clearInterval(this.connTimer)
+					delete this.connTimer
+				}
+				this.initCommunication()
 			}
-			this.initCommunication()
+		} catch (err) {
+			this.log('error', `init_api failed: ${err.message || err}`)
 		}
 	}
 
@@ -261,21 +273,22 @@ class mCamInstance extends InstanceBase {
 
 			this.communicationInitiated = true
 
-			console.log('debug', 'Instance ready to use!')
+			this.log('debug', 'Instance ready to use!')
 		}		
 	}
 
 	async errorCommunication(err) {
 		if (!this.error) {
-			console.log('error', err)
+			this.log('error', err?.data?.error?.type || err?.message || JSON.stringify(err))
 			this.error = true
-			this.updateStatus(err.data.code)
+			this.polling = false
+			this.updateStatus('connection_failure')
 			this.communicationInitiated = false
 			if (this.pollTimer !== undefined) {
 				clearInterval(this.pollTimer)
 				delete this.pollTimer
 			}
-			console.log('debug', 'Try to connect...')
+			this.log('debug', 'Try to connect...')
 			this.connTimer = setInterval(() => {
 				this.init_api()
 			}, 1000)
@@ -284,19 +297,19 @@ class mCamInstance extends InstanceBase {
 
 	initPolling() {
 		if (this.pollTimer === undefined && this.config.pollInterval > 0) {
-			let parameters = []
-			this.pollCommands.forEach((command) => {
-				parameters.push(['inqjs', command])
-			})
+			this.pollParameters = this.pollCommands.map((cmd) => ['inqjs', cmd])
 			this.pollTimer = setInterval(() => {
-				this.sendPollCommands(parameters)
+				this.sendPollCommands(this.pollParameters)
 			}, this.config.pollInterval)
 		}
 	}
 
 	sendPollCommands(parameters) {
+		if (this.polling) return
+		this.polling = true
 		this.makeRequest('inquiry', parameters) // request device info
 		.then((res) => {
+			this.polling = false
 			if (res.status == 200) {
 				if (this.error) {
 					this.error = false
@@ -343,6 +356,7 @@ class mCamInstance extends InstanceBase {
 					'NoiseReduction2DLevel',
 					'NoiseReduction3DLevel',
 					'PictureEffect',
+					'IRCut',
 					'VisibilityEnhancerLevel',
 
 					// ndi
@@ -404,6 +418,10 @@ class mCamInstance extends InstanceBase {
 			else if (!res.response) {
 				this.errorCommunication(res)
 			}
+		})
+		.catch((err) => {
+			this.polling = false
+			this.log('error', `poll failed: ${err.message || err}`)
 		})
 	}
 
@@ -517,15 +535,27 @@ class mCamInstance extends InstanceBase {
 	parsePositions([x, y, z, f]) {
 		this.data.LastZoomPos = this.data.TempZoomPos
 		this.data.TempZoomPos = this.data.CurrentZoomPos
-		this.data.CurrentZoomPos = parseInt(z, 16)
+		const zValue = parseInt(z, 16)
+		if (!Number.isNaN(zValue)) {
+			this.data.CurrentZoomPos = zValue
+		}
 	}
 
 	updateData(source, target, variables) {
 		variables.forEach((variable) => { // update internal data object
-			target[variable] = source[variable]
+			if (source[variable] !== undefined) {
+				target[variable] = source[variable]
+			}
 		})
 
-		this.parsePositions(target.AbsolutePTZF.split(','))
+		if (typeof target.AbsolutePTZF === 'string' && target.AbsolutePTZF.includes(',')) {
+			this.parsePositions(target.AbsolutePTZF.split(','))
+		}
+
+		const parsedComp = this.parseComp(target.ExposureCompensation) || ['', '']
+		const parsedShut = this.parseShut() || ['', '']
+		const exposureGain = parseInt(target.ExposureGain)
+		const normSuffix = (target.Resolution || '').slice(-2)
 
 		this.setVariableValues({ // update variables
 			// audio
@@ -534,17 +564,17 @@ class mCamInstance extends InstanceBase {
 			audio_volume: target.AudioInVolume,
 
 			// camera
-			camera_image_orientation: target.Mirror.replace('off', 'normal'),
+			camera_image_orientation: (target.Mirror || '').replace('off', 'normal'),
 			camera_model: target.ModelName,
 			camera_uptime: target.Uptime,
-			camera_video_norm: this.parseNorm(target.Resolution),
+			camera_video_norm: target.Resolution ? this.parseNorm(target.Resolution) : '',
 
 			// exposure
-			exposure_compensation: this.parseComp(target.ExposureCompensation,)[(['CV420e', 'CV730', 'CV730-NDI', 'CV730-HN'].includes(target.ModelName)) ? 1 : 0],
-			exposure_gain: `+${(parseInt(target.ExposureGain)-1)*3} dB`,
+			exposure_compensation: parsedComp[(['CV420e', 'CV730', 'CV730-NDI', 'CV730-HN'].includes(target.ModelName)) ? 1 : 0],
+			exposure_gain: Number.isNaN(exposureGain) ? '' : `+${(exposureGain - 1) * 3} dB`,
 			exposure_iris: this.parseIris(),
 			exposure_mode: this.parseExp(target.ExposureMode),
-			exposure_shutter_speed: this.parseShut()[(['25', '50'].includes(target.Resolution.slice(-2))) ? 1 : 0],
+			exposure_shutter_speed: parsedShut[(['25', '50'].includes(normSuffix)) ? 1 : 0],
 
 			// focus
 			focus_mode: this.parseFocusMode(target.FocusMode, target.SmartAF),
@@ -555,6 +585,7 @@ class mCamInstance extends InstanceBase {
 			image_brightness: target.DigitalBrightLevel,
 			image_gamma: target.GammaLevel,
 			image_hue: target.ColorHue,
+			image_ir_cut: target.IRCut,
 			image_saturation: target.ColorSaturation,
 			image_sharpness: target.DetailLevel,
 			image_wdr: this.parseWdr(target.VisibilityEnhancerLevel),
@@ -575,17 +606,17 @@ class mCamInstance extends InstanceBase {
 			stream1_frame_rate: target.FrameRate1,
 			// stream1_keyframe_interval: target.IFrameRatio1,
 			stream1_mode: (target.CBR1 == 'on') ? 'CBR' : 'VBR',
-			stream1_resolution: target.ImageSize1.replace(',', 'x'),
+			stream1_resolution: String(target.ImageSize1 || '').replace(',', 'x'),
 			stream2_bitrate: target.BitRate2,
 			stream2_frame_rate: target.FrameRate2,
 			// stream2_keyframe_interval: target.IFrameRatio2,
 			stream2_mode: (target.CBR2 == 'on') ? 'CBR' : 'VBR',
-			stream2_resolution: target.ImageSize2.replace(',', 'x'),
+			stream2_resolution: String(target.ImageSize2 || '').replace(',', 'x'),
 			stream3_bitrate: target.BitRate3,
 			stream3_mode: (target.CBR3 == 'on') ? 'CBR' : 'VBR',
 			// stream3_frame_rate: target.FrameRate3,
 			stream3_keyframe_interval: target.IFrameRatio3,
-			stream3_resolution: target.ImageSize3.replace(',', 'x'),
+			stream3_resolution: String(target.ImageSize3 || '').replace(',', 'x'),
 
 			// white balance
 			wb_gain_blue: target.WhiteBalanceCbGain,
@@ -625,6 +656,242 @@ class mCamInstance extends InstanceBase {
 			Object.assign(output, {[name]: value.trim()})
 		})
 		return output
+	}
+
+	parseAlternateInquiry(data) {
+		const image = data.image || {}
+		const system = data.system || {}
+
+		const mirror = !!Number(image.mirror)
+		const flip = !!Number(image.flip)
+		let orientation = 'off'
+		if (mirror && flip) {
+			orientation = 'mirror+flip'
+		} else if (mirror) {
+			orientation = 'mirror'
+		} else if (flip) {
+			orientation = 'flip'
+		}
+
+		const wdrLevel = Number(image.WDR_level)
+		const wdrEnable = Number(image.WDR_enable)
+		const visibilityEnhancerLevel = wdrEnable ? String(Number.isNaN(wdrLevel) ? 1 : wdrLevel) : '0'
+
+		return {
+			ModelName: system.device_name || this.cameraType || '',
+			Mirror: orientation,
+			DigitalBrightLevel: image.brightness ?? '',
+			GammaLevel: image.gamma ?? '',
+			ColorSaturation: image.saturation ?? '',
+			DetailLevel: image.sharpness ?? '',
+			IRCut: Number(image.ircut) ? 'on' : 'off',
+			VisibilityEnhancerLevel: visibilityEnhancerLevel,
+		}
+	}
+
+	requestJsonData(url, wait = true) {
+		return new Promise((resolve) => {
+			const req = http.get(url, { headers: { Connection: 'keep-alive' } })
+
+			if (wait) {
+				req.on('socket', (socket) => {
+					socket.setTimeout(this.requestTimeout, () => {
+						req.destroy({
+							status: 0,
+							headers: {},
+							data: {
+								error: {
+									type: 'request timeout',
+									url,
+								},
+							},
+						})
+					})
+				})
+			}
+
+			req.on('error', (err) => {
+				resolve(err)
+			})
+
+			req.on('response', (res) => {
+				let data = ''
+				res.on('data', (chunk) => {
+					data += chunk
+				})
+
+				res.on('end', () => {
+					let parsed = {}
+					try {
+						parsed = data ? JSON.parse(data) : {}
+					} catch (e) {
+						parsed = {}
+					}
+					resolve({ status: res.statusCode, headers: res.headers || {}, data: parsed })
+				})
+
+				res.on('error', (err) => {
+					resolve(err)
+				})
+			})
+		})
+	}
+
+	async detectCameraType() {
+		if (this.cameraType !== undefined || !this.config?.host) {
+			return
+		}
+
+		const payload = { system: { device_name: true } }
+		const url = `http://${this.config.host}/cgi-bin/web.fcgi?func=get${encodeURIComponent(JSON.stringify(payload))}`
+		const response = await this.requestJsonData(url)
+
+		if (response.status === 200 && response.data?.status === true && response.data?.system?.device_name) {
+			this.cameraType = response.data.system.device_name
+		} else {
+			this.cameraType = ''
+		}
+	}
+
+	isAlternateCameraModel() {
+		return this.alternateRequestCameraNames.includes(this.cameraType)
+	}
+
+	buildAlternateInquiryPayload() {
+		return {
+			system: {
+				device_name: true,
+			},
+			image: {
+				brightness: true,
+				flip: true,
+				gamma: true,
+				ircut: true,
+				mirror: true,
+				saturation: true,
+				sharpness: true,
+				WDR_enable: true,
+				WDR_level: true,
+			},
+		}
+	}
+
+	async makeAlternateInquiryRequest() {
+		const payload = this.buildAlternateInquiryPayload()
+		const url = `http://${this.config.host}/cgi-bin/web.fcgi?func=get${encodeURIComponent(JSON.stringify(payload))}`
+		const response = await this.requestJsonData(url)
+
+		if (response.status === 200 && response.data?.status === true) {
+			return {
+				status: 200,
+				headers: response.headers,
+				data: {
+					inquiry: this.parseAlternateInquiry(response.data),
+				},
+			}
+		}
+
+		return {
+			status: response.status || 0,
+			headers: response.headers || {},
+			data: response.data || {
+				error: {
+					type: 'invalid alternate response',
+					url,
+				},
+			},
+		}
+	}
+
+	parseAlternateSetResponse(data) {
+		const image = data.image || {}
+		const result = {}
+
+		if ('ircut' in image) result.IRCut = Number(image.ircut) ? 'on' : 'off'
+		if ('brightness' in image) result.DigitalBrightLevel = image.brightness ?? ''
+		if ('gamma' in image) result.GammaLevel = image.gamma ?? ''
+		if ('saturation' in image) result.ColorSaturation = image.saturation ?? ''
+		if ('sharpness' in image) result.DetailLevel = image.sharpness ?? ''
+		if ('mirror' in image || 'flip' in image) {
+			const mirror = !!Number(image.mirror)
+			const flip = !!Number(image.flip)
+			if (mirror && flip) result.Mirror = 'mirror+flip'
+			else if (mirror) result.Mirror = 'mirror'
+			else if (flip) result.Mirror = 'flip'
+			else result.Mirror = 'off'
+		}
+		if ('WDR_enable' in image || 'WDR_level' in image) {
+			const wdrLevel = Number(image.WDR_level)
+			const wdrEnable = Number(image.WDR_enable ?? 0)
+			result.VisibilityEnhancerLevel = wdrEnable ? String(Number.isNaN(wdrLevel) ? 1 : wdrLevel) : '0'
+		}
+		if ('gain' in image) result.ExposureGain = image.gain ?? ''
+		if ('iris' in image) result.ExposureIris = image.iris ?? ''
+		if ('shutter' in image) {
+			result.ExposureExposureTime = image.shutter ?? ''
+			result.ExposureExposureTimePri = image.shutter ?? ''
+		}
+		if ('exposure_mode' in image) result.ExposureMode = image.exposure_mode ?? ''
+		if ('vo_resolution' in image) result.Resolution = image.vo_resolution ?? ''
+
+		return result
+	}
+
+	mapAlternateSetParameters(parameters) {
+		const image = {}
+
+		for (const [key, value] of parameters) {
+			switch (key) {
+				case 'DigitalBrightLevel':
+					image.brightness = Number(value)
+					break
+				case 'GammaLevel':
+					image.gamma = Number(value)
+					break
+				case 'ColorSaturation':
+					image.saturation = Number(value)
+					break
+				case 'DetailLevel':
+					image.sharpness = Number(value)
+					break
+				case 'IRCut':
+					image.ircut = (value === 'on' || value === 1 || value === '1') ? 1 : 0
+					break
+				case 'VisibilityEnhancerLevel': {
+					const level = Number(value)
+					if (Number.isNaN(level) || level <= 0) {
+						image.WDR_enable = 0
+						image.WDR_level = 0
+					} else {
+						image.WDR_enable = 1
+						image.WDR_level = level
+					}
+					break
+				}
+				case 'Mirror':
+					image.mirror = (value === 'mirror' || value === 'mirror+flip') ? 1 : 0
+					image.flip = (value === 'flip' || value === 'mirror+flip') ? 1 : 0
+					break
+				case 'ExposureGain':
+					image.gain = Number(value)
+					break
+				case 'ExposureIris':
+					image.iris = Number(value)
+					break
+				case 'ExposureExposureTime':
+				case 'ExposureExposureTimePri':
+					image.shutter = Number(value)
+					break
+				case 'ExposureMode':
+					image.exposure_mode = value
+					break
+				case 'Resolution':
+					image.vo_resolution = value
+					break
+			}
+		}
+
+		return Object.keys(image).length > 0 ? { image } : null
 	}
 
 	async requestData(url, auth='', getData=false, wait=true) {
@@ -720,7 +987,22 @@ class mCamInstance extends InstanceBase {
 		return `${auth.auth_method} username="${this.config.username}", realm="${auth.realm}", nonce="${auth.nonce}", uri="${uri}", algorithm=${auth.algorithm}, response="${RESP}", qop=${auth.qop}, nc=00000001, cnonce="${cnonce}"`
 	}
 
-	async makeRequest(endpoint, parameters=[]) { // make a request and handle authentication
+	async makeRequest(endpoint, parameters = []) { // make a request and handle authentication
+		this.log('debug', `Making request for endpoint "${endpoint}" with parameters: ${parameters.map(p => p.join('=')).join(', ')}`)
+		if (!this.config?.host) {
+			return {
+				status: 0,
+				headers: {},
+				data: {
+					error: {
+						type: 'missing host',
+						url: '',
+					},
+				},
+			}
+		}
+
+		await this.detectCameraType()
 
 		let uri = `/command/${endpoint}.cgi?`
 
@@ -758,6 +1040,38 @@ class mCamInstance extends InstanceBase {
 			this.updateStatus('camera restarting...')
 		}
 
+		if (this.isAlternateCameraModel()) {
+			if (endpoint === 'inquiry') {
+				const dataReq = await this.makeAlternateInquiryRequest()
+				return this.returRequest(dataReq, restarts)
+			}
+
+			const payload = this.mapAlternateSetParameters(parameters)
+			if (payload) {
+				const url = `http://${this.config.host}/cgi-bin/web.fcgi?func=set${encodeURIComponent(JSON.stringify(payload))}`
+				const response = await this.requestJsonData(url, (restarts.length == 0))
+				const result = this.returRequest({
+					status: response.status || 0,
+					headers: response.headers || {},
+					data: response.data || {},
+				}, restarts)
+				if (result.status === 200 && response.data?.status === true) {
+					const parsed = this.parseAlternateSetResponse(response.data)
+					const fields = Object.keys(parsed)
+					if (fields.length > 0) {
+						this.updateData(parsed, this.data, fields)
+					}
+				}
+				return result
+			}
+
+			return this.returRequest({
+				status: 200,
+				headers: {},
+				data: {},
+			}, restarts)
+		}
+
 		const auth_req = await this.requestData('http://' + this.config.host + '/command/user.cgi') // request authentication data
 		
 		if (!auth_req.headers['www-authenticate']) { // return auth request if not successful
@@ -767,7 +1081,12 @@ class mCamInstance extends InstanceBase {
 		const auth_data = this.createAuth(this.getAuth(auth_req.headers['www-authenticate']), uri) // create authentication string
 		const data_req = await this.requestData('http://' + this.config.host + uri, auth_data, (endpoint == 'inquiry') ? true : false, (restarts.length == 0) ? true : false) // request data
 
-		return this.returRequest(data_req, restarts)
+		const result = this.returRequest(data_req, restarts)
+		if (endpoint !== 'inquiry' && result.status === 200 && this.pollParameters?.length > 0) {
+			this.polling = false
+			setImmediate(() => this.sendPollCommands(this.pollParameters))
+		}
+		return result
 	}
 
 	returRequest(data, restarts) {
@@ -803,7 +1122,7 @@ class mCamInstance extends InstanceBase {
 				type: 'number',
 				id: 'pollInterval',
 				label: 'Polling Interval (ms), set to 0 to disable polling',
-				min: 50,
+				min: 0,
 				max: 1000,
 				default: 200,
 				width: 3,

@@ -355,6 +355,26 @@ function getFeedbacks(inst) {
                 return simple(inst.data.ImageMode, 'custom', event.options.invert)
             }
         },
+        image_ir_cut: {
+            type: 'boolean',
+            name: 'Image: IR Cut ON/OFF',
+            description: 'Show feedback for active IR Cut',
+            options: [
+				{
+					type: 'checkbox',
+					label: 'Inactive:',
+					id: 'invert',
+					default: false,
+				}
+            ],
+            defaultStyle: {
+                color: combineRgb(255, 255, 255),
+                bgcolor: combineRgb(0, 0, 255)
+            },
+            callback: (event) => {
+                return simple(inst.data.IRCut, 'on', event.options.invert)
+            }
+        },
         image_picture_effect: {
             type: 'boolean',
             name: 'Image: Picture Effect',
