@@ -11,6 +11,8 @@ function newVar(id, label, value) {
 
 
 function getVariables(inst) {
+	variables = []
+
     return [
         // audio
         newVar('audio_delay_time', 'Audio Delay Time', ''),
@@ -39,6 +41,7 @@ function getVariables(inst) {
         newVar('image_brightness', 'Brightness', ''),
         newVar('image_gamma', 'Gamma', ''),
         newVar('image_hue', 'Hue', ''),
+        newVar('image_ir_cut', 'IR Cut', ''),
         newVar('image_saturation', 'Saturation', ''),
         newVar('image_sharpness', 'Sharpness', ''),
         newVar('image_wdr', 'Wide Dynamic Range', ''),

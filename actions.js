@@ -930,6 +930,25 @@ function getActions(inst) {
                 inst.makeRequest('imaging', parameters)
             }
         },
+        image_ir_cut: {
+            name: 'Image: IR Cut ON/OFF',
+            options: [
+                {
+                    type: 'dropdown',
+                    label: 'IR Cut:',
+                    id: 'state',
+                    default: 'toggle',
+                    choices: [
+                        {id: 'toggle', label: 'Toggle'},
+                        {id: 'on', label: 'Enable'},
+                        {id: 'off', label: 'Disable'}
+                    ]
+                }
+            ],
+            callback: async (event) => {
+                inst.makeRequest('imaging', [['IRCut', toggle(event.options.state, inst.data.IRCut, ['on', 'off'])]])
+            }
+        },
         image_custom: {
             name: 'Image: Custom ON/OFF',
             options: [
