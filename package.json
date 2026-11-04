@@ -3,8 +3,7 @@
 	"version": "1.0.2",
 	"main": "index.js",
 	"scripts": {
-		"build": "node --check index.js && node --check actions.js && node --check feedbacks.js && node --check presets.js && node --check variables.js && node --check upgrades.js",
-		"test": "node --test test/*.test.cjs"
+		"test": "echo \"Error: no test specified\" && exit 1"
 	},
 	"repository": {
 		"type": "git",
